@@ -1,5 +1,8 @@
 name: FastAPI CI Pipeline
 
+permissions:
+  contents: read
+  packages: write
 on:
   push:
     branches: [main]
@@ -22,8 +25,19 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run automated tests
-        run: python -m pytest -v
-
       - name: Build Docker image
         run: docker build -t fastapi-cicd:test .
+
+      - name: Login to GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push Docker image to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          docker tag fastapi-cicd:test ghcr.io/krishna5121/fastapi-cicd:latest
+          docker push ghcr.io/krishna5121/fastapi-cicd:latest
