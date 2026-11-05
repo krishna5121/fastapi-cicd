@@ -34,7 +34,7 @@ jobs:
           pip install -r requirements.txt
           pip install pytest
 
-      # Step 4: Run automated tests
+      # Step 4: Run tests
       - name: Run tests
         run: python -m pytest -q
 
@@ -55,11 +55,11 @@ jobs:
       - name: Push Docker image to GHCR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          docker tag fastapi-cicd:test ghcr.io/krishna5121/fastapi-cicd:latest
+          docker tag fastapi-cicd:test \
+            ghcr.io/krishna5121/fastapi-cicd:latest
           docker push ghcr.io/krishna5121/fastapi-cicd:latest
 
-      # Step 8: Debug AWS OIDC configuration
-      # Temporary step - remove after authentication works
+      # Step 8: Debug AWS configuration
       - name: Debug AWS OIDC configuration
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
@@ -72,7 +72,59 @@ jobs:
           echo "Git Ref: $GITHUB_REF"
           echo "Event: $GITHUB_EVENT_NAME"
 
-      # Step 9: Authenticate GitHub Actions with AWS
+      # Step 9: Inspect actual GitHub OIDC claims
+      # Temporary diagnostic step - remove after debugging
+      - name: Inspect GitHub OIDC claims
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import json
+          import base64
+          import urllib.parse
+          import urllib.request
+
+          request_url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
+          request_token = os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]
+
+          separator = "&" if "?" in request_url else "?"
+          url = (
+              request_url
+              + separator
+              + "audience="
+              + urllib.parse.quote("sts.amazonaws.com")
+          )
+
+          request = urllib.request.Request(
+              url,
+              headers={
+                  "Authorization": f"Bearer {request_token}"
+              }
+          )
+
+          with urllib.request.urlopen(request) as response:
+              jwt = json.load(response)["value"]
+
+          payload = jwt.split(".")[1]
+          payload += "=" * (-len(payload) % 4)
+
+          claims = json.loads(
+              base64.urlsafe_b64decode(payload)
+          )
+
+          for key in (
+              "iss",
+              "aud",
+              "sub",
+              "repository",
+              "ref",
+              "event_name"
+          ):
+              print(f"{key}: {claims.get(key)}")
+          PY
+
+      # Step 10: Authenticate GitHub Actions with AWS
       - name: Configure AWS credentials
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: aws-actions/configure-aws-credentials@v4
@@ -81,18 +133,18 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
           role-session-name: GitHubActions-ECR-Push
 
-      # Step 10: Verify AWS identity
+      # Step 11: Verify AWS authentication
       - name: Verify AWS identity
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: aws sts get-caller-identity
 
-      # Step 11: Login to Amazon ECR
+      # Step 12: Login to Amazon ECR
       - name: Login to Amazon ECR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Step 12: Push Docker image to Amazon ECR
+      # Step 13: Push Docker image to ECR
       - name: Push Docker image to Amazon ECR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
@@ -100,5 +152,8 @@ jobs:
           ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker tag fastapi-cicd:test $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker tag fastapi-cicd:test \
+            "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+          docker push \
+            "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
