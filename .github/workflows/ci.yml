@@ -1,13 +1,16 @@
+
 name: FastAPI CI Pipeline
 
-permissions:
-  contents: read
-  packages: write
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
 
 jobs:
   test-and-build:
@@ -25,10 +28,14 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Run tests
+        run: python -m pytest -q
+
       - name: Build Docker image
         run: docker build -t fastapi-cicd:test .
 
-      - name: Login to GitHub Container Registry
+      # Push to GitHub Container Registry
+      - name: Login to GHCR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/login-action@v3
         with:
@@ -41,3 +48,28 @@ jobs:
         run: |
           docker tag fastapi-cicd:test ghcr.io/krishna5121/fastapi-cicd:latest
           docker push ghcr.io/krishna5121/fastapi-cicd:latest
+
+      # Authenticate GitHub Actions with AWS using OIDC
+      - name: Configure AWS credentials
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # Authenticate Docker with Amazon ECR
+      - name: Login to Amazon ECR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # Push Docker image to ECR
+      - name: Push Docker image to Amazon ECR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker tag fastapi-cicd:test $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
